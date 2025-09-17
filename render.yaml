@@ -1,14 +1,15 @@
 services:
   - type: web
     name: basket-backend
-    env: python
+    runtime: python
     rootDir: project/backend
     buildCommand: pip install -r requirements.txt && pip install gunicorn
     startCommand: gunicorn app:app -b 0.0.0.0:$PORT --timeout 600
     autoDeploy: true
 
-  - type: static_site
+  - type: web
     name: basket-frontend
+    runtime: static
     rootDir: project
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
