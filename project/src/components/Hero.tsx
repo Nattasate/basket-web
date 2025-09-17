@@ -32,9 +32,6 @@ const Hero: React.FC<HeroProps> = ({ onGetStarted }) => {
                 <span>Start Analysis</span>
                 <ArrowRight className="h-5 w-5" />
               </button>
-              <button className="border-2 border-gray-300 text-gray-700 px-8 py-3 rounded-lg font-semibold hover:border-gray-400 hover:bg-gray-50 transition-all duration-200 flex items-center justify-center space-x-2">
-                <span>View Demo</span>
-              </button>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-16">
