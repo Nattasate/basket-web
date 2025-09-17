@@ -4,6 +4,9 @@ services:
     runtime: python
     plan: free
     rootDir: project/backend
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
     buildCommand: pip install -r requirements.txt && pip install gunicorn
     startCommand: gunicorn app:app -b 0.0.0.0:$PORT --timeout 600
     autoDeploy: true
