@@ -5,7 +5,7 @@ import { ShoppingCart, Upload, BarChart3, Download } from 'lucide-react'; // น
 // ประกาศคอมโพเนนต์ Header แบบฟังก์ชัน โดยไม่รับพร็อพ (FC = React.FunctionComponent)
 const Header: React.FC = () => {
   return (
-    <>                                                                 // Fragment ครอบองค์ประกอบทั้งหมด (ไม่สร้าง DOM wrapper เพิ่ม)
+    <>                                                                 
       <header className="bg-white/10 backdrop-blur-md border-b border-white/20 sticky top-0 z-50">
         {/* 
           <header> คือส่วน head bar ของหน้าเว็บ
