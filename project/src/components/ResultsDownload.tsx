@@ -60,9 +60,23 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
       return;
     }
 
+    const downloadPath = `/api/download/${format}/${downloadUrls[format]}`;
+    const downloadHref = api(downloadPath);
     const link = document.createElement('a');
-    link.href = `http://localhost:5000/api/download/${format}/${downloadUrls[format]}`;
-    link.download = downloadUrls[format];
+    link.href = downloadHref;
+
+    try {
+      const resolvedUrl = new URL(downloadHref, window.location.origin);
+      if (resolvedUrl.origin === window.location.origin) {
+        link.download = downloadUrls[format];
+      } else {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+    } catch {
+      link.download = downloadUrls[format];
+    }
+
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
