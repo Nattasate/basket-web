@@ -1,6 +1,6 @@
 """
-Flask Backend สำหรับ Market Basket Analysis เท่านั้น
-รองรับการวิเคราะห์ตะกร้าสินค้าด้วย mlxtend library
+Flask backend for Market Basket Analysis.
+Supports market basket analysis using the mlxtend library.
 """
 
 from flask import Flask, request, jsonify, send_file
@@ -15,44 +15,46 @@ import tempfile
 from werkzeug.utils import secure_filename
 import logging
 import traceback
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Import data processor
 from data_processors.basket_analyzer import BasketAnalyzer
 
-# สร้าง Flask app
+# Create Flask app
 app = Flask(__name__)
 CORS(app)
 
-# ตั้งค่า logging
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ตั้งค่าแอปพลิเคชัน
+# Configure application settings
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
 
-# สร้างโฟลเดอร์ uploads
+# Ensure the uploads directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def read_file_safely(filepath):
-    """อ่านไฟล์อย่างปลอดภัยด้วย encoding หลายแบบ"""
+    """Read a file safely using multiple encodings."""
     try:
         if filepath.lower().endswith('.csv'):
-            # ลอง encoding หลายแบบสำหรับ CSV
+            # Try multiple encodings for CSV files
             encodings = ['utf-8', 'utf-8-sig', 'cp1252', 'iso-8859-1', 'tis-620', 'windows-1252']
             for encoding in encodings:
                 try:
                     df = pd.read_csv(filepath, encoding=encoding)
-                    print(f"✅ อ่าน CSV สำเร็จด้วย encoding: {encoding}")
+                    print(f"[OK] CSV read successfully with encoding: {encoding}")
                     return df
                 except UnicodeDecodeError:
                     continue
             
-            # ถ้าไม่ได้ ลองใช้ chardet
+            # Fallback to chardet if the encodings fail
             try:
                 import chardet
                 with open(filepath, 'rb') as f:
@@ -60,93 +62,217 @@ def read_file_safely(filepath):
                     detected = chardet.detect(raw_data)
                     if detected['encoding']:
                         df = pd.read_csv(filepath, encoding=detected['encoding'])
-                        print(f"✅ อ่าน CSV สำเร็จด้วย detected encoding: {detected['encoding']}")
+                        print(f"[OK] CSV read successfully with detected encoding: {detected['encoding']}")
                         return df
             except:
                 pass
                 
         else:
-            # สำหรับ Excel
+            # Excel readers fallback chain
             try:
                 df = pd.read_excel(filepath, engine='openpyxl')
-                print("✅ อ่าน Excel สำเร็จด้วย openpyxl")
+                print("[OK] Excel read successfully with openpyxl")
                 return df
             except:
                 try:
                     df = pd.read_excel(filepath, engine='xlrd')
-                    print("✅ อ่าน Excel สำเร็จด้วย xlrd")
+                    print("[OK] Excel read successfully with xlrd")
                     return df
                 except:
                     pass
         
-        raise Exception("ไม่สามารถอ่านไฟล์ได้")
+        raise Exception("Unable to read the file")
         
     except Exception as e:
-        raise Exception(f"เกิดข้อผิดพลาดในการอ่านไฟล์: {str(e)}")
+        raise Exception(f"Error reading file: {str(e)}")
+
+
+HEADER_FILL = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
+HEADER_FONT = Font(color='1E293B', bold=True)
+HEADER_ALIGNMENT = Alignment(horizontal='center', vertical='center')
+TEXT_ALIGNMENT = Alignment(horizontal='left', vertical='center')
+NUMBER_ALIGNMENT = Alignment(horizontal='right', vertical='center')
+THIN_BORDER = Border(
+    left=Side(style='thin', color='DDE1E6'),
+    right=Side(style='thin', color='DDE1E6'),
+    top=Side(style='thin', color='DDE1E6'),
+    bottom=Side(style='thin', color='DDE1E6')
+)
+
+def _format_summary_value(value):
+    if value is None or value == '':
+        return '-'
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if np.isnan(number) or np.isinf(number):
+            return '-'
+        if abs(number - round(number)) < 1e-9:
+            return f"{int(round(number)):,}"
+        formatted = f"{number:,.4f}".rstrip('0').rstrip('.')
+        return formatted if formatted else '0'
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+    return str(value)
+
+def _auto_fit_columns(worksheet, min_width=12, max_width=60):
+    for column_cells in worksheet.columns:
+        column_cells = list(column_cells)
+        if not column_cells:
+            continue
+        first_cell = column_cells[0]
+        column_letter = getattr(first_cell, 'column_letter', None)
+        if not column_letter:
+            column_letter = get_column_letter(first_cell.column)
+        max_length = 0
+        for cell in column_cells:
+            if cell.value is None:
+                continue
+            value = str(cell.value)
+            if '\n' in value:
+                length = max(len(line) for line in value.splitlines())
+            else:
+                length = len(value)
+            if length > max_length:
+                max_length = length
+        adjusted_width = max(min_width, min(max_length + 4, max_width))
+        worksheet.column_dimensions[column_letter].width = adjusted_width
+
+def _style_excel_sheet(worksheet, *, freeze_pane='A2', numeric_formats=None):
+    if worksheet is None:
+        return
+    if worksheet.max_row == 0:
+        return
+    if freeze_pane:
+        worksheet.freeze_panes = freeze_pane
+    header_rows = list(worksheet.iter_rows(min_row=1, max_row=1))
+    if not header_rows:
+        return
+    header_row = header_rows[0]
+    header_lookup = {}
+    for cell in header_row:
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = THIN_BORDER
+        if cell.value is not None:
+            header_lookup[str(cell.value).strip().lower()] = getattr(cell, 'column', cell.column)
+    for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row):
+        for cell in row:
+            if isinstance(cell.value, (int, float, np.integer, np.floating)) and not (isinstance(cell.value, float) and (np.isnan(cell.value) or np.isinf(cell.value))):
+                cell.alignment = NUMBER_ALIGNMENT
+            else:
+                cell.alignment = TEXT_ALIGNMENT
+            cell.border = THIN_BORDER
+    if numeric_formats:
+        for header_name, number_format in numeric_formats.items():
+            key = header_name.strip().lower()
+            column_index = header_lookup.get(key)
+            if not column_index:
+                continue
+            column_letter = get_column_letter(column_index)
+            for cell in worksheet[column_letter][1:]:
+                if isinstance(cell.value, (int, float, np.integer, np.floating)):
+                    cell.number_format = number_format
+                    cell.alignment = NUMBER_ALIGNMENT
+    _auto_fit_columns(worksheet)
+
 
 def create_download_files(results, filename):
-    """สร้างไฟล์สำหรับดาวน์โหลด - เฉพาะ Excel และ CSV"""
+    """Create download files (Excel and CSV)."""
     try:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp_dt = datetime.now()
+        timestamp = timestamp_dt.strftime('%Y%m%d_%H%M%S')
+        generated_at = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S')
         base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-        
+
+        results_dict = results or {}
+        if not isinstance(results_dict, dict):
+            results_dict = dict(results_dict) if hasattr(results, 'items') else {}
+        meta = results_dict.get('meta') if isinstance(results_dict.get('meta'), dict) else {}
+
+        summary_pairs = [
+            ('Analysis Type', 'Market Basket Analysis'),
+            ('Original File', filename or '-'),
+            ('Generated At', generated_at),
+            ('Total Rules', results_dict.get('totalRules', 0)),
+            ('Total Transactions', results_dict.get('totalTransactions', 0)),
+            ('Total Items', results_dict.get('totalItems', 0)),
+            ('Total Frequent Itemsets', results_dict.get('totalFrequentItemsets', 0)),
+        ]
+
+        if meta:
+            summary_pairs.extend([
+                ('Detected Transaction Column', meta.get('detectedTransCol') or '-'),
+                ('Detected Item Column', meta.get('detectedItemCol') or '-'),
+                ('Min Support', meta.get('minSupport')),
+                ('Min Lift', meta.get('minLift')),
+            ])
+            heuristics = meta.get('heuristics')
+            if heuristics:
+                try:
+                    heuristics_text = json.dumps(heuristics, ensure_ascii=False)
+                except Exception:
+                    heuristics_text = str(heuristics)
+                summary_pairs.append(('Auto Detection Notes', heuristics_text))
+
+        summary_rows = [(label, _format_summary_value(value)) for label, value in summary_pairs]
+        summary_df = pd.DataFrame(summary_rows, columns=['Metric', 'Value'])
+
         output_files = {}
-        
-        # 1. Excel File - Complete Report
+
         excel_filename = f"basket_analysis_{base_name}_{timestamp}.xlsx"
         excel_filepath = os.path.join(UPLOAD_FOLDER, excel_filename)
-        
+
         with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
-            # Summary sheet
-            summary_data = {
-                'Metric': ['Analysis Type', 'Original File', 'Generated At', 'Total Rules', 'Total Transactions', 'Total Items'],
-                'Value': [
-                    'Market Basket Analysis',
-                    filename,
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    results.get('totalRules', 0),
-                    results.get('totalTransactions', 0),
-                    results.get('totalItems', 0)
-                ]
-            }
-            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
-            
-            # All Association Rules
-            if 'rulesTable' in results and results['rulesTable']:
-                rules_df = pd.DataFrame(results['rulesTable'])
-                rules_df.to_excel(writer, sheet_name='Association Rules', index=False)
-            
-            # Single Item Rules (if available)
-            if 'singleRulesTable' in results and results['singleRulesTable']:
-                single_rules_df = pd.DataFrame(results['singleRulesTable'])
-                single_rules_df.to_excel(writer, sheet_name='Single Item Rules', index=False)
-            
-            # Frequent Itemsets
-            if 'frequentItemsetsTable' in results and results['frequentItemsetsTable']:
-                frequent_df = pd.DataFrame(results['frequentItemsetsTable'])
-                frequent_df.to_excel(writer, sheet_name='Frequent Itemsets', index=False)
-        
+            rules_df = pd.DataFrame(results_dict.get('rulesTable') or [])
+
+            if rules_df.empty:
+                rules_df = pd.DataFrame(columns=['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift'])
+
+            preferred_columns = ['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift']
+            primary_columns = [col for col in preferred_columns if col in rules_df.columns]
+            extra_columns = [col for col in rules_df.columns if col not in primary_columns]
+            ordered_columns = primary_columns + extra_columns if primary_columns or extra_columns else rules_df.columns.tolist()
+
+            export_df = rules_df[ordered_columns] if ordered_columns else rules_df
+            export_df.to_excel(writer, sheet_name='Association Rules', index=False)
+
+            worksheet = writer.sheets.get('Association Rules')
+            if worksheet is not None:
+                worksheet.freeze_panes = None
+
+            workbook = writer.book
+            try:
+                workbook.active = workbook.sheetnames.index('Association Rules')
+            except Exception:
+                workbook.active = 0
+
         output_files['excel'] = excel_filename
-        
-        # 2. CSV File - Association Rules
+
         csv_filename = f"association_rules_{base_name}_{timestamp}.csv"
         csv_filepath = os.path.join(UPLOAD_FOLDER, csv_filename)
-        
-        if 'rulesTable' in results and results['rulesTable']:
-            rules_df = pd.DataFrame(results['rulesTable'])
-            rules_df.to_csv(csv_filepath, index=False, encoding='utf-8-sig')
-        
+
+        if results_dict.get('rulesTable'):
+            pd.DataFrame(results_dict['rulesTable']).to_csv(csv_filepath, index=False, encoding='utf-8-sig')
+
         output_files['csv'] = csv_filename
-        
+
         return True, output_files
-        
+
     except Exception as e:
-        print(f"❌ Error creating download files: {str(e)}")
+        print(f"[ERROR] Error creating download files: {str(e)}")
         return False, str(e)
+
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """ตรวจสอบสถานะของ API"""
+    """Health check endpoint."""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
@@ -155,9 +281,9 @@ def health_check():
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    """อัปโหลดไฟล์ Excel/CSV และแปลงเป็น JSON"""
+    """Upload an Excel/CSV file and return JSON data."""
     try:
-        print("📁 Received upload request")
+        print("[INFO] Received upload request")
         
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
@@ -169,27 +295,27 @@ def upload_file():
         if not allowed_file(file.filename):
             return jsonify({'error': 'File type not allowed. Please upload Excel or CSV files.'}), 400
         
-        print(f"📄 Processing file: {file.filename}")
+        print(f"[INFO] Processing file: {file.filename}")
         
-        # บันทึกไฟล์
+        # Save uploaded file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"{timestamp}_{secure_filename(file.filename)}"
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
         
-        print(f"✅ File saved as: {filename}")
+        print(f"[INFO] File saved as: {filename}")
         
-        # อ่านข้อมูลจากไฟล์
+        # Read data from the file
         df = read_file_safely(filepath)
         
-        # ทำความสะอาดข้อมูลเบื้องต้น
+        # Basic cleanup
         df = df.fillna('')
         
-        # แปลงเป็น list of lists สำหรับ frontend
+        # Convert data to a list of lists for the frontend
         headers = [str(col) for col in df.columns.tolist()]
         rows = []
         
-        # จำกัดข้อมูลที่ส่งไปแสดงเป็น 1000 แถวแรก
+        # Limit preview output to the first 1000 rows
         display_df = df.head(1000)
         
         for _, row in display_df.iterrows():
@@ -203,7 +329,7 @@ def upload_file():
         
         data = [headers] + rows
         
-        print(f"✅ File processed successfully. Total rows: {len(df)}, Display rows: {len(rows)}, Columns: {len(headers)}")
+        print(f"[INFO] File processed successfully. Total rows: {len(df)}, Display rows: {len(rows)}, Columns: {len(headers)}")
         
         response_data = {
             'success': True,
@@ -219,14 +345,14 @@ def upload_file():
             
     except Exception as e:
         logger.error(f"Upload error: {str(e)}")
-        print(f"❌ Upload error: {str(e)}")
+        print(f"[ERROR] Upload error: {str(e)}")
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
 @app.route('/api/process', methods=['POST'])
 def process_data():
-    """ประมวลผล Market Basket Analysis"""
+    """Run the market basket analysis workflow."""
     try:
-        print("🔄 Starting Market Basket Analysis...")
+        print("[INFO] Starting Market Basket Analysis...")
         data = request.get_json()
         
         if not data:
@@ -235,32 +361,32 @@ def process_data():
         filename = data.get('filename')
         selected_columns = data.get('selectedColumns', [])
         
-        print(f"📊 Processing: {filename}, Columns: {len(selected_columns)}")
+        print(f"[INFO] Processing: {filename}, Columns: {len(selected_columns)}")
         
         if not filename:
             return jsonify({'error': 'Missing filename'}), 400
         
-        # อ่านไฟล์ที่อัปโหลดไว้
+        # Read the uploaded file
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         if not os.path.exists(filepath):
             return jsonify({'error': 'File not found'}), 404
         
-        # อ่านข้อมูลทั้งหมด
+        # Load the entire dataset
         df = read_file_safely(filepath)
-        print(f"✅ File read successfully. Shape: {df.shape}")
+        print(f"[INFO] File read successfully. Shape: {df.shape}")
         
-        # เลือกเฉพาะคอลัมน์ที่ต้องการ (ถ้ามี)
+        # Slice to the requested columns when provided
         if selected_columns:
             try:
                 selected_df = df.iloc[:, selected_columns]
-                print(f"📋 Selected columns: {selected_df.columns.tolist()}")
+                print(f"[INFO] Selected columns: {selected_df.columns.tolist()}")
             except IndexError:
                 return jsonify({'error': 'Selected columns are out of range'}), 400
         else:
             selected_df = df
         
-        # ประมวลผล Market Basket Analysis
-        print(f"⚙️ Running Market Basket Analysis...")
+        # Run the basket analysis
+        print(f"[INFO] Running Market Basket Analysis...")
         
         analyzer = BasketAnalyzer(min_support=0.001, min_lift=1.0)
         results = analyzer.analyze_basket(selected_df, df)
@@ -268,17 +394,17 @@ def process_data():
         if not results.get('success'):
             return jsonify({'error': results.get('error', 'Analysis failed')}), 500
         
-        print("✅ Analysis completed")
+        print("[INFO] Analysis completed")
         
-        # สร้างไฟล์ผลลัพธ์
-        print("💾 Creating download files...")
+        # Create downloadable files
+        print("[INFO] Creating download files...")
         success, output_files = create_download_files(results, filename)
         
         if not success:
-            print(f"⚠️ Warning: Could not create all download files: {output_files}")
+            print(f"[WARN] Could not create all download files: {output_files}")
             output_files = {}
         
-        print("🎉 Processing completed successfully")
+        print("[INFO] Processing completed successfully")
         
         return jsonify({
             'success': True,
@@ -298,13 +424,13 @@ def process_data():
         
     except Exception as e:
         logger.error(f"Processing error: {str(e)}")
-        print(f"❌ Processing error: {str(e)}")
+        print(f"[ERROR] Processing error: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
 @app.route('/api/download/<format>/<filename>', methods=['GET'])
 def download_file(format, filename):
-    """ดาวน์โหลดไฟล์ผลลัพธ์"""
+    """Download the generated result file."""
     try:
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         if not os.path.exists(filepath):
@@ -316,12 +442,12 @@ def download_file(format, filename):
         logger.error(f"Download error: {str(e)}")
         return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
-# ทำความสะอาดไฟล์เก่า
+# Remove outdated files
 def cleanup_old_files():
-    """ลบไฟล์เก่าที่เก็บไว้เกิน 1 ชั่วโมง"""
+    """Remove files that are older than one hour."""
     try:
         current_time = datetime.now().timestamp()
-        max_age = 3600  # 1 ชั่วโมง
+        max_age = 3600  # 1 hour
         
         for filename in os.listdir(UPLOAD_FOLDER):
             filepath = os.path.join(UPLOAD_FOLDER, filename)
@@ -329,18 +455,19 @@ def cleanup_old_files():
                 file_age = current_time - os.path.getmtime(filepath)
                 if file_age > max_age:
                     os.remove(filepath)
-                    print(f"🗑️ Deleted old file: {filename}")
+                    print(f"[INFO] Deleted old file: {filename}")
     except Exception as e:
-        print(f"⚠️ Cleanup error: {str(e)}")
+        print(f"[WARN] Cleanup error: {str(e)}")
 
 if __name__ == '__main__':
-    print("🚀 Starting Market Basket Analysis Server...")
-    print("🛒 Market Basket Analysis API is ready!")
-    print("🌐 Frontend can connect to: http://localhost:5000")
-    print("📁 Upload folder:", UPLOAD_FOLDER)
+    print("[INFO] Starting Market Basket Analysis Server...")
+    print("[INFO] Market Basket Analysis API is ready!")
+    print("[INFO] Frontend can connect to: http://localhost:5000")
+    print("[INFO] Upload folder:", UPLOAD_FOLDER)
     
-    # ทำความสะอาดไฟล์เก่า
+    # Remove outdated files
     cleanup_old_files()
     
-    # รันเซิร์ฟเวอร์
+    # Start the server
     app.run(debug=True, host='0.0.0.0', port=5000)
+
