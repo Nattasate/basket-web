@@ -51,10 +51,11 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
   const results = processedData?.results;
 
   const [selectedFormat, setSelectedFormat] = useState<string>('excel');
+  const [downloadingFormat, setDownloadingFormat] = useState<string | null>(null);
   const selectedFormatData =
     downloadFormats.find((format) => format.id === selectedFormat) ?? downloadFormats[0];
 
-  const handleDownload = (format: string) => {
+  const handleDownload = async (format: string) => {
     if (!downloadUrls || !downloadUrls[format]) {
       alert('ไฟล์รูปแบบนี้ไม่พร้อมใช้งาน');
       return;
@@ -62,24 +63,46 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
 
     const downloadPath = `/api/download/${format}/${downloadUrls[format]}`;
     const downloadHref = api(downloadPath);
-    const link = document.createElement('a');
-    link.href = downloadHref;
+    setDownloadingFormat(format);
 
     try {
-      const resolvedUrl = new URL(downloadHref, window.location.origin);
-      if (resolvedUrl.origin === window.location.origin) {
-        link.download = downloadUrls[format];
-      } else {
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
+      const response = await fetch(downloadHref, { method: 'GET', credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(`Download failed with status ${response.status}`);
       }
-    } catch {
-      link.download = downloadUrls[format];
-    }
 
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const blob = await response.blob();
+      let resolvedFilename = downloadUrls[format];
+      const disposition = response.headers.get('content-disposition');
+
+      if (disposition) {
+        const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+        if (match) {
+          const rawName = match[1] ?? match[2];
+          if (rawName) {
+            try {
+              resolvedFilename = decodeURIComponent(rawName);
+            } catch {
+              resolvedFilename = rawName;
+            }
+          }
+        }
+      }
+
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = resolvedFilename || downloadUrls[format];
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error('Download failed', error);
+      alert('ดาวน์โหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setDownloadingFormat(null);
+    }
   };
 
   if (!results || !results.success) {
@@ -129,6 +152,10 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
   const topRules = Array.isArray(results.rulesTable)
     ? results.rulesTable.slice(0, 15)
     : [];
+
+  const isFormatAvailable = Boolean(downloadUrls && downloadUrls[selectedFormat]);
+  const isDownloadingCurrent = downloadingFormat === selectedFormat;
+  const isDownloadDisabled = !isFormatAvailable || downloadingFormat !== null;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-12 space-y-10">
@@ -305,15 +332,17 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
 
             <button
               onClick={() => handleDownload(selectedFormat)}
-              disabled={!downloadUrls || !downloadUrls[selectedFormat]}
+              disabled={isDownloadDisabled}
               className={`px-8 py-4 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-3 mx-auto text-lg ${
-                downloadUrls && downloadUrls[selectedFormat]
+                !isDownloadDisabled
                   ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800 shadow-lg hover:shadow-xl'
                   : 'bg-gray-300 text-gray-500 cursor-not-allowed'
               }`}
             >
               <Download className="h-6 w-6" />
-              <span>ดาวน์โหลด {selectedFormatData?.name}</span>
+              <span>
+                {isDownloadingCurrent ? 'กำลังดาวน์โหลด...' : `ดาวน์โหลด ${selectedFormatData?.name}`}
+              </span>
             </button>
 
             <p className="text-sm text-gray-500">🛒 Market Basket Analysis Results - พร้อมใช้งานทันที</p>
