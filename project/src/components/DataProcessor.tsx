@@ -1,4 +1,5 @@
 import { api } from '../lib/api';
+import { normalizeDownloadMap } from '../lib/downloads';
 // คอมโพเนนต์สำหรับประมวลผล Market Basket Analysis
 import React, { useState, useEffect } from 'react';
 import { CheckCircle, Clock, Cog, BarChart3, TrendingUp, AlertCircle, ShoppingCart } from 'lucide-react';
@@ -73,11 +74,42 @@ const DataProcessor: React.FC<DataProcessorProps> = ({
         setCurrentStep(6);
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Create download URLs
-        const downloadUrls = result.outputFiles || {};
-        
+        // Ensure output files are always present
+        const normalizedDownloadUrls = normalizeDownloadMap(
+          result?.downloadUrls,
+          result?.outputFiles,
+          result?.results?.downloadUrls,
+          result?.results?.outputFiles
+        );
+
+        if (Object.keys(normalizedDownloadUrls).length === 0) {
+          console.warn('No download files received from backend');
+        }
+
+        const augmentedResult = {
+          ...result,
+          downloadUrls: normalizedDownloadUrls,
+          outputFiles: {
+            ...(result?.outputFiles ?? {}),
+            ...normalizedDownloadUrls
+          },
+          results: result?.results
+            ? {
+                ...result.results,
+                downloadUrls: {
+                  ...(result.results?.downloadUrls ?? {}),
+                  ...normalizedDownloadUrls
+                },
+                outputFiles: {
+                  ...(result.results?.outputFiles ?? {}),
+                  ...normalizedDownloadUrls
+                }
+              }
+            : result?.results
+        };
+
         setIsComplete(true);
-        onProcessingComplete(result, downloadUrls);
+        onProcessingComplete(augmentedResult, normalizedDownloadUrls);
 
       } catch (err) {
         setError(err instanceof Error ? err.message : 'An unexpected error occurred');
@@ -156,7 +188,7 @@ const DataProcessor: React.FC<DataProcessorProps> = ({
         {processingSteps.map((step, index) => {
           const StepIcon = step.icon;
           const isActive = index === currentStep - 1 && !isComplete && !error;
-          const isCompleted = index < currentStep || isComplete;
+          const isCompleted = (index < currentStep - 1) || (isComplete && index <= currentStep - 1);
           const isPending = index >= currentStep && !isComplete && !error;
           
           return (
@@ -191,15 +223,15 @@ const DataProcessor: React.FC<DataProcessorProps> = ({
                   {step.description}
                 </p>
               </div>
-              <div className="ml-4">
+              <div className="ml-4 flex h-8 w-8 items-center justify-center">
                 {isActive && (
-                  <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent"></div>
                 )}
-                {isCompleted && (
+                {!isActive && isCompleted && (
                   <CheckCircle className="h-6 w-6 text-green-500" />
                 )}
-                {isPending && (
-                  <Clock className="h-6 w-6 text-gray-400" />
+                {!isActive && isPending && (
+                  <Clock className="h-6 w-6 text-blue-400" />
                 )}
               </div>
             </div>
