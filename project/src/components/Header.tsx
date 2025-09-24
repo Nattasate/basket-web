@@ -13,8 +13,9 @@ const Header: React.FC = () => {
                 <ShoppingCart className="h-6 w-6 text-white" />
               </div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-emerald-600 to-blue-600 bg-clip-text text-transparent">
-                Data First
+              <a href='/'>Data First</a>
               </h1>
+
             </div>
             <nav className="hidden md:flex items-center space-x-8">
               <div className="flex items-center space-x-2 text-gray-600 hover:text-emerald-600 transition-colors">
