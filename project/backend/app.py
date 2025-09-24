@@ -11,8 +11,9 @@ import json
 import io
 import os
 from datetime import datetime
+from urllib.parse import unquote
 import tempfile
-from werkzeug.utils import secure_filename
+from werkzeug.utils import secure_filename, safe_join
 import logging
 import traceback
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
@@ -31,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Configure application settings
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER_NAME = 'uploads'
+UPLOAD_FOLDER = os.path.join(app.root_path, UPLOAD_FOLDER_NAME)
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
 
 # Ensure the uploads directory exists
@@ -183,69 +185,37 @@ def _style_excel_sheet(worksheet, *, freeze_pane='A2', numeric_formats=None):
     _auto_fit_columns(worksheet)
 
 
+
 def create_download_files(results, filename):
-    """Create download files (Excel and CSV)."""
+    "Create download files (Excel and CSV)."
     try:
         timestamp_dt = datetime.now()
         timestamp = timestamp_dt.strftime('%Y%m%d_%H%M%S')
-        generated_at = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S')
         base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
 
         results_dict = results or {}
         if not isinstance(results_dict, dict):
             results_dict = dict(results_dict) if hasattr(results, 'items') else {}
-        meta = results_dict.get('meta') if isinstance(results_dict.get('meta'), dict) else {}
-
-        summary_pairs = [
-            ('Analysis Type', 'Market Basket Analysis'),
-            ('Original File', filename or '-'),
-            ('Generated At', generated_at),
-            ('Total Rules', results_dict.get('totalRules', 0)),
-            ('Total Transactions', results_dict.get('totalTransactions', 0)),
-            ('Total Items', results_dict.get('totalItems', 0)),
-            ('Total Frequent Itemsets', results_dict.get('totalFrequentItemsets', 0)),
-        ]
-
-        if meta:
-            summary_pairs.extend([
-                ('Detected Transaction Column', meta.get('detectedTransCol') or '-'),
-                ('Detected Item Column', meta.get('detectedItemCol') or '-'),
-                ('Min Support', meta.get('minSupport')),
-                ('Min Lift', meta.get('minLift')),
-            ])
-            heuristics = meta.get('heuristics')
-            if heuristics:
-                try:
-                    heuristics_text = json.dumps(heuristics, ensure_ascii=False)
-                except Exception:
-                    heuristics_text = str(heuristics)
-                summary_pairs.append(('Auto Detection Notes', heuristics_text))
-
-        summary_rows = [(label, _format_summary_value(value)) for label, value in summary_pairs]
-        summary_df = pd.DataFrame(summary_rows, columns=['Metric', 'Value'])
 
         output_files = {}
 
-        excel_filename = f"basket_analysis_{base_name}_{timestamp}.xlsx"
+        rules_df = pd.DataFrame(results_dict.get('rulesTable') or [])
+        if rules_df.empty:
+            rules_df = pd.DataFrame(columns=['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift'])
+
+        preferred_columns = ['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift']
+        primary_columns = [col for col in preferred_columns if col in rules_df.columns]
+        extra_columns = [col for col in rules_df.columns if col not in primary_columns]
+        ordered_columns = primary_columns + extra_columns if primary_columns or extra_columns else rules_df.columns.tolist()
+        export_rules_df = rules_df[ordered_columns] if ordered_columns else rules_df
+
+        excel_filename = f"association_rules_{base_name}_{timestamp}.xlsx"
         excel_filepath = os.path.join(UPLOAD_FOLDER, excel_filename)
 
         with pd.ExcelWriter(excel_filepath, engine='openpyxl') as writer:
-            rules_df = pd.DataFrame(results_dict.get('rulesTable') or [])
-
-            if rules_df.empty:
-                rules_df = pd.DataFrame(columns=['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift'])
-
-            preferred_columns = ['Antecedents', 'Consequents', 'Support', 'Confidence', 'Lift']
-            primary_columns = [col for col in preferred_columns if col in rules_df.columns]
-            extra_columns = [col for col in rules_df.columns if col not in primary_columns]
-            ordered_columns = primary_columns + extra_columns if primary_columns or extra_columns else rules_df.columns.tolist()
-
-            export_df = rules_df[ordered_columns] if ordered_columns else rules_df
-            export_df.to_excel(writer, sheet_name='Association Rules', index=False)
-
-            worksheet = writer.sheets.get('Association Rules')
-            if worksheet is not None:
-                worksheet.freeze_panes = None
+            export_rules_df.to_excel(writer, sheet_name='Association Rules', index=False)
+            rules_ws = writer.sheets.get('Association Rules')
+            _style_excel_sheet(rules_ws, freeze_pane='A2', numeric_formats={'Support': '0.000000', 'Confidence': '0.000000', 'Lift': '0.000000'})
 
             workbook = writer.book
             try:
@@ -257,10 +227,7 @@ def create_download_files(results, filename):
 
         csv_filename = f"association_rules_{base_name}_{timestamp}.csv"
         csv_filepath = os.path.join(UPLOAD_FOLDER, csv_filename)
-
-        if results_dict.get('rulesTable'):
-            pd.DataFrame(results_dict['rulesTable']).to_csv(csv_filepath, index=False, encoding='utf-8-sig')
-
+        export_rules_df.to_csv(csv_filepath, index=False, encoding='utf-8-sig')
         output_files['csv'] = csv_filename
 
         return True, output_files
@@ -268,6 +235,9 @@ def create_download_files(results, filename):
     except Exception as e:
         print(f"[ERROR] Error creating download files: {str(e)}")
         return False, str(e)
+
+
+
 
 
 @app.route('/api/health', methods=['GET'])
@@ -404,14 +374,25 @@ def process_data():
             print(f"[WARN] Could not create all download files: {output_files}")
             output_files = {}
         
+
+        if isinstance(results, dict):
+            try:
+                existing_output_files = results.get('outputFiles') if isinstance(results.get('outputFiles'), dict) else {}
+                merged_output_files = {**existing_output_files, **output_files}
+                results['outputFiles'] = merged_output_files
+                results['downloadUrls'] = {**output_files}
+            except Exception as merge_error:
+                print(f"[WARN] Could not attach download metadata to results: {merge_error}")
+
         print("[INFO] Processing completed successfully")
-        
-        return jsonify({
+
+        response_payload = {
             'success': True,
             'analysisType': 'basket',
             'selectedColumns': selected_columns,
             'results': results,
             'outputFiles': output_files,
+            'downloadUrls': output_files,
             'summary': {
                 'totalRows': len(df),
                 'processedRows': len(selected_df),
@@ -420,26 +401,47 @@ def process_data():
                 'processingTime': 'Completed',
                 'completedAt': datetime.now().isoformat()
             }
-        })
-        
+        }
+
+        return jsonify(response_payload)
+
+
     except Exception as e:
-        logger.error(f"Processing error: {str(e)}")
-        print(f"[ERROR] Processing error: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Processing error: {str(e)}", exc_info=True)
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
-@app.route('/api/download/<format>/<filename>', methods=['GET'])
+
+
+@app.route('/api/download/<format>/<path:filename>', methods=['GET'])
 def download_file(format, filename):
-    """Download the generated result file."""
+    # Return the requested analysis file for download.
     try:
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        if not os.path.exists(filepath):
+        valid_formats = {
+            'excel': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'csv': 'text/csv'
+        }
+
+        if format not in valid_formats:
+            return jsonify({'error': 'Unsupported download format'}), 400
+
+        decoded_filename = unquote(filename)
+        safe_path = safe_join(UPLOAD_FOLDER, decoded_filename)
+
+        if not safe_path or not os.path.exists(safe_path):
+            logger.warning('Download request missing file: %s', filename)
             return jsonify({'error': 'File not found'}), 404
-        
-        return send_file(filepath, as_attachment=True)
-        
+
+        download_name = os.path.basename(decoded_filename)
+
+        return send_file(
+            safe_path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype=valid_formats[format]
+        )
+
     except Exception as e:
-        logger.error(f"Download error: {str(e)}")
+        logger.error(f"Download error: {str(e)}", exc_info=True)
         return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
 # Remove outdated files
