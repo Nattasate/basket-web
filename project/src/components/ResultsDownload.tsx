@@ -8,7 +8,7 @@ interface ResultsDownloadProps {
   processedData: any;
   downloadUrls?: any;
 }
-
+ดดด
 const downloadFormats = [
   {
     id: 'excel',
