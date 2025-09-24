@@ -365,8 +365,8 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
               <h4 className="font-semibold text-gray-900">📋 ไฟล์ที่จะดาวน์โหลด:</h4>
               {selectedFormat === 'excel' ? (
                 <div className="space-y-1">
-                  <p>- Association rules table (same columns as CSV)</p>
-                  <p>- Ready to use in Microsoft Excel or Google Sheets</p>
+                  <p>- Association rules table with the same columns as CSV</p>
+                  <p>- Ready for Microsoft Excel or Google Sheets</p>
                 </div>
               ) : (
                 <div className="space-y-1">
