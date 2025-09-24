@@ -1,6 +1,7 @@
 import { api } from '../lib/api';
-﻿// คอมโพเนนต์หน้าพรีวิวผลลัพธ์สำหรับหน้าดาวน์โหลด - แสดงเฉพาะข้อมูลที่ต้องการ
-import React, { useState } from 'react';
+import { normalizeDownloadMap, DownloadMap } from '../lib/downloads';
+// คอมโพเนนต์หน้าพรีวิวผลลัพธ์สำหรับหน้าดาวน์โหลด - แสดงเฉพาะข้อมูลที่ต้องการ
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, FileText, Table, CheckCircle, ShoppingCart } from 'lucide-react';
 
 interface ResultsDownloadProps {
@@ -12,7 +13,7 @@ const downloadFormats = [
   {
     id: 'excel',
     name: 'Excel (.xlsx)',
-    description: 'Complete analysis with multiple sheets',
+    description: 'Association rules table in Excel format',
     icon: Table,
     recommended: true
   },
@@ -55,14 +56,59 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
   const selectedFormatData =
     downloadFormats.find((format) => format.id === selectedFormat) ?? downloadFormats[0];
 
+  const resolvedDownloadUrls = useMemo<DownloadMap>(() => {
+    return normalizeDownloadMap(
+      downloadUrls,
+      processedData?.downloadUrls,
+      processedData?.outputFiles,
+      processedData?.results?.downloadUrls,
+      processedData?.results?.outputFiles
+    );
+  }, [downloadUrls, processedData]);
+
+  useEffect(() => {
+    if (!resolvedDownloadUrls[selectedFormat]) {
+      const firstAvailable = downloadFormats.find((format) => resolvedDownloadUrls[format.id]);
+      if (firstAvailable) {
+        setSelectedFormat(firstAvailable.id);
+      }
+    }
+  }, [resolvedDownloadUrls, selectedFormat]);
+
   const handleDownload = async (format: string) => {
-    if (!downloadUrls || !downloadUrls[format]) {
+    const target = resolvedDownloadUrls[format];
+
+    if (!target) {
       alert('ไฟล์รูปแบบนี้ไม่พร้อมใช้งาน');
       return;
     }
 
-    const downloadPath = `/api/download/${format}/${downloadUrls[format]}`;
-    const downloadHref = api(downloadPath);
+    const buildDownloadHref = () => {
+      if (typeof target === 'string' && /^https?:\/\//i.test(target)) {
+        return target;
+      }
+      if (typeof target === 'string' && target.startsWith('/')) {
+        return api(target);
+      }
+      const encodedFilename = encodeURIComponent(target);
+      return api(`/api/download/${format}/${encodedFilename}`);
+    };
+
+    const downloadHref = buildDownloadHref();
+    const isCrossOrigin =
+      /^https?:\/\//i.test(downloadHref) && !downloadHref.startsWith(window.location.origin);
+
+    if (isCrossOrigin) {
+      const link = document.createElement('a');
+      link.href = downloadHref;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     setDownloadingFormat(format);
 
     try {
@@ -72,7 +118,7 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
       }
 
       const blob = await response.blob();
-      let resolvedFilename = downloadUrls[format];
+      let resolvedFilename = target;
       const disposition = response.headers.get('content-disposition');
 
       if (disposition) {
@@ -92,7 +138,7 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
       const objectUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
-      link.download = resolvedFilename || downloadUrls[format];
+      link.download = resolvedFilename || target;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -153,7 +199,7 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
     ? results.rulesTable.slice(0, 15)
     : [];
 
-  const isFormatAvailable = Boolean(downloadUrls && downloadUrls[selectedFormat]);
+  const isFormatAvailable = Boolean(resolvedDownloadUrls[selectedFormat]);
   const isDownloadingCurrent = downloadingFormat === selectedFormat;
   const isDownloadDisabled = !isFormatAvailable || downloadingFormat !== null;
 
@@ -271,7 +317,7 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {downloadFormats.map((format) => {
               const FormatIcon = format.icon;
-              const isAvailable = Boolean(downloadUrls && downloadUrls[format.id]);
+              const isAvailable = Boolean(resolvedDownloadUrls[format.id]);
 
               return (
                 <div
@@ -319,13 +365,13 @@ const ResultsDownload: React.FC<ResultsDownloadProps> = ({ processedData, downlo
               <h4 className="font-semibold text-gray-900">📋 ไฟล์ที่จะดาวน์โหลด:</h4>
               {selectedFormat === 'excel' ? (
                 <div className="space-y-1">
-                  <p>• รายงานครบถ้วนหลาย sheets: Summary, Association Rules, Single Rules, Frequent Itemsets</p>
-                  <p>• พร้อมใช้งานใน Microsoft Excel หรือ Google Sheets</p>
+                  <p>- Association rules table (same columns as CSV)</p>
+                  <p>- Ready to use in Microsoft Excel or Google Sheets</p>
                 </div>
               ) : (
                 <div className="space-y-1">
-                  <p>• Association Rules ในรูปแบบ CSV</p>
-                  <p>• เปิดได้ใน Excel, Google Sheets, หรือโปรแกรมอื่นๆ</p>
+                  <p>- Association rules in CSV format</p>
+                  <p>- Open with Excel, Google Sheets, or any spreadsheet tool</p>
                 </div>
               )}
             </div>
