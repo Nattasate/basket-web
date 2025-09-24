@@ -186,6 +186,7 @@ def _style_excel_sheet(worksheet, *, freeze_pane='A2', numeric_formats=None):
 
 
 
+
 def create_download_files(results, filename):
     "Create download files (Excel and CSV)."
     try:
@@ -235,7 +236,6 @@ def create_download_files(results, filename):
     except Exception as e:
         print(f"[ERROR] Error creating download files: {str(e)}")
         return False, str(e)
-
 
 
 
@@ -472,4 +472,3 @@ if __name__ == '__main__':
     
     # Start the server
     app.run(debug=True, host='0.0.0.0', port=5000)
-
